@@ -1,0 +1,66 @@
+name: Build 
+
+on: workflow_dispatch
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    name: Build 
+    steps:
+    - uses: actions/checkout@v4
+    - name: Build 
+      uses: vmactions/freebsd-vm@v1
+      with:
+        usesh: true
+        release: 13.2
+        prepare: |
+          pkg install -y jq node16 npm-node16 wget curl git gcc bash gawk gsed
+          wget https://dl.google.com/go/go1.22.0.freebsd-amd64.tar.gz && tar -C /usr/local -xzf go1.22.0.freebsd-amd64.tar.gz && rm go1.22.0.freebsd-amd64.tar.gz
+          ln -s /usr/local/go/bin/go /usr/local/bin/go
+          # curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+          # echo '. $HOME/.cargo/env' >> ~/.bashrc
+          # . "$HOME/.cargo/env"
+        run: |
+          export LATEST_APP=$(wget -qO- https://api.github.com/repos/px-org/PanIndex/tags | gawk -F '["v]' '/name/{print "v"$5;exit}')
+          git clone -b $LATEST_APP https://github.com/px-org/PanIndex
+          cd PanIndex
+          export RELEASE_TAG=$(basename ${GITHUB_REF})
+          export APP_NAME="PanIndex"
+          export BUILD_TARGET="freebsd/amd64"
+          export ldflags="\
+            -w -s \
+            -X 'github.com/px-org/PanIndex/module.VERSION=${RELEASE_TAG}' \
+            -X 'github.com/px-org/PanIndex/module.BUILD_TIME=$(date "+%F %T")' \
+            -X 'github.com/px-org/PanIndex/module.GO_VERSION=$(go version)' \
+            -X 'github.com/px-org/PanIndex/module.GIT_COMMIT_SHA=$(git show -s --format=%H)' \
+            "
+          export LatestTag=$(git describe --tags `git rev-list --tags --max-count=1` | cut -c 2-)
+          CGO_ENABLED=1 go build -o ${APP_NAME} -ldflags="$ldflags" -tags=jsoniter .
+          
+    - name: Upload artifact
+      uses: actions/upload-artifact@main
+      with:
+        name: PanIndex-freebsd
+        path: |
+            PanIndex/PanIndex
+
+    - name: Generate release tag
+      id: tag
+      run: echo "release_tag=$(wget -qO- https://api.github.com/repos/px-org/PanIndex/tags | gawk -F '["v]' '/name/{print "v"$5;exit}')" >> $GITHUB_OUTPUT
+
+    - name: Create release
+      uses: softprops/action-gh-release@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: ${{ steps.tag.outputs.release_tag }}
+        files: |
+              PanIndex/PanIndex
+              
+    - name: Delete workflow runs
+      uses: Mattraks/delete-workflow-runs@v2
+      with:
+        token: ${{ github.token }}
+        repository: ${{ github.repository }}
+        retain_days: 1
+        keep_minimum_runs: 8
